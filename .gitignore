@@ -1,0 +1,12 @@
+# Large data files
+processed/
+raw/
+logs/
+__pycache__/
+*.pyc
+
+# Keep output viz parquets (small, needed for dashboard)
+# output/ is NOT ignored
+
+# macOS
+.DS_Store

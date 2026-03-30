@@ -19,6 +19,29 @@ import streamlit as st
 
 OUTPUT = Path("output")
 
+
+def significance_badge(fig, sig_df, finding_name, x=0.01, y=0.97, xanchor="left"):
+    """Add a significance badge annotation to a plotly figure."""
+    row = sig_df[sig_df["finding"] == finding_name]
+    if row.empty:
+        return fig
+    row = row.iloc[0]
+    is_sig   = row["is_significant"]
+    conf     = row["confidence_pct"]
+    icon     = "🟢" if is_sig else "🔴"
+    label    = "SIGNIFICANT" if is_sig else "NOT SIGNIFICANT"
+    color    = "#27ae60" if is_sig else "#e74c3c"
+    fig.add_annotation(
+        x=x, y=y, xref="paper", yref="paper",
+        xanchor=xanchor, yanchor="top",
+        text=f"<b>{icon} {label}</b><br>{conf:.1f}% confident",
+        showarrow=False,
+        font=dict(size=10, color=color),
+        bgcolor="rgba(255,255,255,0.92)",
+        bordercolor=color, borderwidth=1.5, borderpad=5,
+    )
+    return fig
+
 st.set_page_config(
     page_title="HMDA Interactive Explorer",
     page_icon="📊",
@@ -38,9 +61,10 @@ def load():
     inc_st  = pd.read_parquet(OUTPUT / "viz_income_state.parquet")
     dr_nat  = pd.read_parquet(OUTPUT / "viz_denial_reasons_national.parquet")
     dr_full = pd.read_parquet(OUTPUT / "viz_denial_reasons.parquet")
-    return lp, state, msa_r, nat, lt, inc_nat, inc_lp, inc_st, dr_nat, dr_full
+    sig = pd.read_parquet(OUTPUT / "viz_significance.parquet")
+    return lp, state, msa_r, nat, lt, inc_nat, inc_lp, inc_st, dr_nat, dr_full, sig
 
-lp, state, msa_r, nat, lt, inc_nat, inc_lp, inc_st, dr_nat, dr_full = load()
+lp, state, msa_r, nat, lt, inc_nat, inc_lp, inc_st, dr_nat, dr_full, sig = load()
 
 YEARS = sorted(nat["year"].unique().tolist())
 
@@ -80,8 +104,8 @@ risk_df["risk_score"]    = (
 ).round(1)
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-st.title("📊 HMDA Interactive Explorer — Mortgage Market Dynamics")
-st.caption("All four panels update simultaneously with the year slider below.")
+st.title("Market Hysteresis: Why the 2008 Ghost Still Haunts American Lending")
+st.caption("HMDA Data Analysis 2007–2017  •  150M+ loan applications across 50 states")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MASTER YEAR SLIDER
@@ -168,6 +192,8 @@ with col1:
                    showgrid=True, gridcolor="rgba(0,0,0,0.07)"),
         margin=dict(t=50, b=40, l=10, r=10),
     )
+    fig1 = significance_badge(fig1, sig, "Application Volume Drop", x=0.01, y=0.97)
+    fig1 = significance_badge(fig1, sig, "Approval Rate Structural Break (2008)", x=0.01, y=0.85)
     st.plotly_chart(fig1, use_container_width=True)
 
     # Mini stats
@@ -255,61 +281,81 @@ col3, col4 = st.columns([1, 1])
 with col3:
     st.subheader("3. Recovery Race: MSAs vs 2007 Baseline")
 
-    top_n_bars = st.slider("Number of MSAs to show", 10, 30, 20, key="msa_n")
+    msa_all = msa_r[msa_r["year"] == year].dropna(subset=["msa_md_name"]).copy()
 
-    msa_yr = msa_r[msa_r["year"] == year].dropna(subset=["msa_md_name"]).copy()
-    msa_yr = msa_yr.sort_values("recovery_index", ascending=True).tail(top_n_bars)
+    top10    = msa_all.nlargest(10, "recovery_index").sort_values("recovery_index", ascending=True)
+    bottom10 = msa_all.nsmallest(10, "recovery_index").sort_values("recovery_index", ascending=True)
 
-    bar_colors = [
-        "#27ae60" if v >= 100 else ("#f39c12" if v >= 70 else "#e74c3c")
-        for v in msa_yr["recovery_index"]
-    ]
+    # shorten city names to first city only
+    top10["city"]    = top10["msa_md_name"].str.split("-").str[0].str.strip()
+    bottom10["city"] = bottom10["msa_md_name"].str.split("-").str[0].str.strip()
 
-    fig3 = go.Figure(go.Bar(
-        y=msa_yr["msa_md_name"],
-        x=msa_yr["recovery_index"],
+    fig3 = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=[
+            f"🟢 Top 10 Recovering Cities — {year}",
+            f"🔴 Bottom 10 Lagging Cities — {year}",
+        ],
+        horizontal_spacing=0.18,
+    )
+
+    # Top 10 — green bars
+    fig3.add_trace(go.Bar(
+        y=top10["city"],
+        x=top10["recovery_index"],
         orientation="h",
-        marker_color=bar_colors,
-        text=msa_yr["recovery_index"].round(1).astype(str),
+        marker_color="#27ae60",
+        text=top10["recovery_index"].round(1).astype(str),
         textposition="outside",
         hovertemplate="<b>%{y}</b><br>Recovery Index: %{x:.1f}<extra></extra>",
-    ))
+        showlegend=False,
+    ), row=1, col=1)
 
-    fig3.add_vline(x=100, line_dash="dash", line_color="#333", line_width=1.5,
-                   annotation_text="2007 Baseline (100)",
-                   annotation_position="top right",
-                   annotation_font=dict(size=10))
+    # Bottom 10 — red bars
+    fig3.add_trace(go.Bar(
+        y=bottom10["city"],
+        x=bottom10["recovery_index"],
+        orientation="h",
+        marker_color="#e74c3c",
+        text=bottom10["recovery_index"].round(1).astype(str),
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Recovery Index: %{x:.1f}<extra></extra>",
+        showlegend=False,
+    ), row=1, col=2)
 
-    above_100 = (msa_r[msa_r["year"]==year]["recovery_index"] >= 100).sum()
-    total_msa = len(msa_r[msa_r["year"]==year])
+    # Baseline vlines on both
+    for col_i in [1, 2]:
+        fig3.add_vline(x=100, line_dash="dash", line_color="#333",
+                       line_width=1.5, col=col_i, row=1)
+
+    x_max_top = max(top10["recovery_index"].max() * 1.2, 130)
+    x_max_bot = max(bottom10["recovery_index"].max() * 1.4, 60)
+
+    fig3.update_xaxes(title_text="Recovery Index (2007=100)",
+                      range=[0, x_max_top],
+                      showgrid=True, gridcolor="rgba(0,0,0,0.06)", row=1, col=1)
+    fig3.update_xaxes(title_text="Recovery Index (2007=100)",
+                      range=[0, x_max_bot],
+                      showgrid=True, gridcolor="rgba(0,0,0,0.06)", row=1, col=2)
+    fig3.update_yaxes(tickfont=dict(size=9), row=1, col=1)
+    fig3.update_yaxes(tickfont=dict(size=9), row=1, col=2)
+
+    above_100 = (msa_all["recovery_index"] >= 100).sum()
+    total_msa = len(msa_all)
 
     fig3.update_layout(
         height=420,
-        title=dict(
-            text=f"Top {top_n_bars} Recovered MSAs — {year}  "
-                 f"({above_100}/{total_msa} MSAs at or above baseline)",
-            font=dict(size=12),
-        ),
-        xaxis=dict(
-            title="Recovery Index (2007=100)",
-            range=[0, max(msa_yr["recovery_index"].max() * 1.15, 120)],
-            showgrid=True, gridcolor="rgba(0,0,0,0.06)",
-        ),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=9)),
         plot_bgcolor="white", paper_bgcolor="white",
-        margin=dict(t=50, b=40, l=10, r=70),
+        margin=dict(t=50, b=40, l=10, r=80),
     )
+    fig3 = significance_badge(fig3, sig, "MSA Recovery Gap (Top 10 vs Bottom 10)", x=0.01, y=0.97)
     st.plotly_chart(fig3, use_container_width=True)
 
     c3a, c3b, c3c = st.columns(3)
     below_100 = total_msa - above_100
-    best_msa  = msa_r[msa_r["year"]==year].nlargest(1,"recovery_index").iloc[0]
-    worst_msa = msa_r[msa_r["year"]==year].nsmallest(1,"recovery_index").iloc[0]
     c3a.metric("Recovered (≥100)", str(above_100), f"{below_100} still below")
-    c3b.metric("Fastest", best_msa["msa_md_name"].split("-")[0].strip(),
-               f"{best_msa['recovery_index']:.0f}")
-    c3c.metric("Slowest", worst_msa["msa_md_name"].split("-")[0].strip(),
-               f"{worst_msa['recovery_index']:.0f}")
+    c3b.metric("Fastest", top10.iloc[-1]["city"], f"{top10.iloc[-1]['recovery_index']:.0f}")
+    c3c.metric("Slowest", bottom10.iloc[0]["city"], f"{bottom10.iloc[0]['recovery_index']:.0f}")
 
 # ── Panel 4: Risk Appetite ────────────────────────────────────────────────────
 with col4:
@@ -408,7 +454,6 @@ risk_row = risk_df[risk_df["year"]==year].iloc[0]
 c4.metric("Risk Score",          f"{risk_row['risk_score']:.1f}/100")
 c5.metric("Private Lending Share", f"{risk_row['conv_share']:.1f}%")
 
-st.caption("HMDA data: CFPB/FFIEC 2007–2017  •  Move the slider above to explore all years simultaneously.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FULL DASHBOARD — ALL PANELS (from viz_dashboard.py)
@@ -432,11 +477,8 @@ INFLECTION_YEAR = int(
 )
 
 st.markdown("---")
-st.title("🏠 HMDA Mortgage Market: Crash & Recovery (2007–2017)")
-st.caption(
-    "Source: CFPB / FFIEC Home Mortgage Disclosure Act historic data  •  "
-    f"Crash bottom: **{BOTTOM_YEAR}**  •  Recovery inflection: **{INFLECTION_YEAR}**"
-)
+st.header("Full Dashboard — Deep Dive by Panel")
+st.caption(f"Crash bottom: **{BOTTOM_YEAR}**  •  Recovery inflection: **{INFLECTION_YEAR}**")
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -532,7 +574,6 @@ st.plotly_chart(fig1, use_container_width=True)
 
 # ── Interest Rate Chart ──────────────────────────────────────────────────────
 st.subheader("30-Year Fixed Mortgage Rate (Freddie Mac PMMS)")
-st.caption("Source: Freddie Mac Primary Mortgage Market Survey — annual averages.")
 
 nat_rate = nat.merge(MORTGAGE_RATES, on="year")
 
@@ -837,6 +878,7 @@ fig2.update_layout(
     title=dict(text=f"Mortgage Denial Rates by State — {selected_year}", font=dict(size=15)),
     paper_bgcolor="white",
 )
+fig2 = significance_badge(fig2, sig, "Denial Rate Differences Across States", x=0.01, y=0.97)
 st.plotly_chart(fig2, use_container_width=True)
 
 if selected_year > min(YEARS):
@@ -1092,6 +1134,7 @@ fig5a.update_layout(
                showgrid=True, gridcolor="rgba(0,0,0,0.07)"),
     margin=dict(t=60, b=40),
 )
+fig5a = significance_badge(fig5a, sig, "Denial Reason Mix Shift Post-2008", x=0.01, y=0.97)
 st.plotly_chart(fig5a, use_container_width=True)
 
 st.subheader("How the Mix of Denial Reasons Shifted")
@@ -1311,6 +1354,7 @@ fig6b.update_layout(
     yaxis2=dict(title="Income needed per $100K ($K)", range=[35, 60], showgrid=False),
     margin=dict(t=40, b=40),
 )
+fig6b = significance_badge(fig6b, sig, "LTI Ratio Increase (2007–2017)", x=0.99, y=0.97, xanchor="right")
 st.plotly_chart(fig6b, use_container_width=True)
 
 st.info(
@@ -1472,4 +1516,3 @@ for col in tbl6.columns[1:]:
 st.dataframe(tbl6.reset_index(drop=True), use_container_width=True, hide_index=True)
 
 st.markdown("---")
-st.caption("HMDA data from CFPB/FFIEC, 2007–2017. Pipeline: Python / Pandas / Parquet. Dashboard: Streamlit / Plotly.")

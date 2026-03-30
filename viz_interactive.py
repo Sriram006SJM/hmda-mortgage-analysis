@@ -1516,3 +1516,45 @@ for col in tbl6.columns[1:]:
 st.dataframe(tbl6.reset_index(drop=True), use_container_width=True, hide_index=True)
 
 st.markdown("---")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STATISTICAL PROOF SUMMARY
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("---")
+st.header("📊 Statistical Proof Summary")
+st.caption("Every visual pattern in this dashboard has been tested for statistical significance.")
+
+# Summary table
+summary_rows = []
+for _, row in sig.iterrows():
+    icon = "🟢" if row["is_significant"] else "🔴"
+    summary_rows.append({
+        "Finding":    row["finding"],
+        "Confidence": f"{row['confidence_pct']:.1f}%",
+        "Result":     f"{icon} {'Significant' if row['is_significant'] else 'Not Significant'}",
+        "Verdict":    row["verdict"],
+    })
+summary_df = pd.DataFrame(summary_rows)
+st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+# Plain-English callout per finding
+for _, row in sig.iterrows():
+    if row["is_significant"]:
+        st.success(f"**{row['finding']}** — {row['verdict']}\n\n_{row['detail']}_")
+    else:
+        st.error(f"**{row['finding']}** — {row['verdict']}\n\n_{row['detail']}_")
+
+# Methodology expander
+with st.expander("Methodology — for technical readers"):
+    method_rows = []
+    for _, row in sig.iterrows():
+        method_rows.append({
+            "Finding":     row["finding"],
+            "Test":        row["test_name"],
+            "p-value":     f"{row['p_value']:.6f}",
+            "Effect Size": f"{row['effect_size']:.4f} ({row['effect_size_label']})",
+        })
+    st.dataframe(pd.DataFrame(method_rows), use_container_width=True, hide_index=True)
+    st.caption("Packages: scipy==1.13.0 · statsmodels==0.14.1 · pymannkendall==1.4.3")
